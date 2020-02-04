@@ -24,6 +24,7 @@ using xTile.Dimensions;
 using StardewValley.TerrainFeatures;
 using xTile.Layers;
 using System.Collections;
+using TMXLoader.Other;
 
 namespace TMXLoader
 {
@@ -245,6 +246,7 @@ namespace TMXLoader
             if (!Game1.IsMasterGame)
                 return;
 
+            var ja = Helper.ModRegistry.GetApi<IJsonAssetsAPI>("spacechase0.JsonAssets");
             saveData = Helper.Data.ReadSaveData<SaveData>("Locations");
             if (saveData != null)
             {
@@ -253,10 +255,30 @@ namespace TMXLoader
                     Monitor.Log("Restore Location objects: " + loc.Name);
 
                     setLocationObejcts(loc);
+                    try
+                    {
+                        if (ja != null && Game1.getLocationFromName(loc.Name) is GameLocation location)
+                            ja.FixIdsInLocation(location);
+                    }
+                    catch
+                    {
+
+                    }
                 }
 
                 foreach (var b in saveData.Buildables)
+                {
                     loadSavedBuildable(b);
+                    try
+                    {
+                        if (ja != null && b.Indoors is SaveLocation sl && Game1.getLocationFromName(sl.Name) is GameLocation indoorsLocation)
+                            ja.FixIdsInLocation(indoorsLocation);
+                    }
+                    catch
+                    {
+
+                    }
+                }
             }
         }
 
@@ -348,6 +370,9 @@ namespace TMXLoader
 
         private GameLocation buildBuildableIndoors(BuildableEdit edit, string uniqueId, string playerName, long playerId, GameLocation location, Dictionary<string,string> colors)
         {
+            if (Game1.getLocationFromName(getLocationName(uniqueId)) is GameLocation preLocation)
+                return preLocation;
+
             if (edit.indoorsFile != null && edit._pack != null)
             {
                 string buildFile = edit.indoorsFile;
@@ -398,8 +423,8 @@ namespace TMXLoader
 
             GameLocation indoors = buildBuildableIndoors(edit, uniqueId, playerName,playerId, location, colors);
 
-            if (indoors != null)
-                buildablesExits.AddOrReplace(indoors.Name, new Warp(0, 0, location.Name, edit.exitTile[0] + position.X, edit.exitTile[1] + position.Y, false));
+            if (indoors != null && !buildablesExits.ContainsKey(indoors.Name))
+                buildablesExits.Add(indoors.Name, new Warp(0, 0, location.Name, edit.exitTile[0] + position.X, edit.exitTile[1] + position.Y, false));
 
           
             string buildFile = edit.file;
@@ -464,6 +489,22 @@ namespace TMXLoader
             e._map = map;
 
             SaveBuildable sav = (new SaveBuildable(edit.id, location.Name, position, uniqueId, playerName,playerId, colors));
+
+            if (edit.tags.Contains("IsUnique"))
+                foreach (SaveBuildable sb in new List<SaveBuildable>(buildablesBuild.Where(bb => bb.Id == edit.id && bb.UniqueId != uniqueId)))
+                {
+                    BuildableEdit sbedit = buildables.Find(be => be.id == sb.Id);
+
+                    if (sbedit.indoorsFile != null && Game1.getLocationFromName(getLocationName(sb.UniqueId)) is GameLocation sblocation)
+                    {
+                        var locSaveData = getLocationSaveData(sblocation);
+                        locSaveData.Name = getLocationName(uniqueId);
+                        setLocationObejcts(locSaveData);
+                    }
+
+                    removeSavedBuildable(sb, pay, distribute);
+                }
+
             buildablesBuild.Add(sav);
 
             if (distribute && Game1.IsMultiplayer)
@@ -491,8 +532,7 @@ namespace TMXLoader
 
                         Game1.player.removeItemsFromInventory(item.ParentSheetIndex, tItem.stock);
                     }
-
-            }
+            }           
         }
 
         private void fixWaterTiles(GameLocation location)
@@ -691,12 +731,28 @@ namespace TMXLoader
                             helper.Content.InvalidateCache(Game1.currentLocation.mapPath.Value);
                             try
                             {
-                                Helper.Reflection.GetMethod(Game1.currentLocation, "reloadMap").Invoke();
+                                Helper.Reflection.GetMethod(Game1.currentLocation, "reloadMap")?.Invoke();
+                                Game1.currentLocation.GetType().GetField("_appliedMapOverrides", BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(Game1.currentLocation,new HashSet<string>());
+                                Game1.currentLocation.GetType().GetField("ccRefurbished", BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(Game1.currentLocation, false);
+                                Game1.currentLocation.GetType().GetField("isShowingDestroyedJoja", BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(Game1.currentLocation, false);
+                                Game1.currentLocation.GetType().GetField("isShowingUpgradedPamHouse", BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(Game1.currentLocation, false);
+                                Game1.currentLocation.GetType().GetField("isShowingDestroyedJoja", BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(Game1.currentLocation, false);
+
+                                Helper.Reflection.GetMethod(Game1.currentLocation, "resetLocalState")?.Invoke();
+                                foreach (var buildable in new List<SaveBuildable>(buildablesBuild.Where(b => b.Location == Game1.currentLocation.Name)))
+                                {
+                                    buildablesBuild.Remove(buildable);
+                                    BuildableEdit edit = buildables.Find(be => be.id == buildable.Id);
+
+                                    if (edit.indoorsFile != null && Game1.getLocationFromName(getLocationName(buildable.UniqueId)) is GameLocation location)
+                                        buildable.Indoors = getLocationSaveData(location);
+
+                                    loadSavedBuildable(buildable);
+                                }
                             }
                             catch (Exception ex)
                             {
                                 Monitor.Log(ex.Message + ":" + ex.StackTrace);
-
                             }
                             e.NewLocation.updateSeasonalTileSheets();
 
@@ -779,7 +835,6 @@ namespace TMXLoader
 
         private void fixCompatibilities()
         {
-            Compatibility.CustomFarmTypes.LoadingTheMaps();
             helper.Events.GameLoop.SaveLoaded += (s, e) => Compatibility.CustomFarmTypes.fixGreenhouseWarp();
         }
 
