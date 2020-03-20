@@ -10,6 +10,7 @@ using System.Linq;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework;
 using StardewValley.Menus;
+using Amazon.Polly;
 
 namespace PelicanTTS
 {
@@ -18,18 +19,23 @@ namespace PelicanTTS
         internal static bool greeted;
         internal static ModConfig config;
         internal static IModHelper _helper;
+        internal static IManifest _manifest;
         internal static ITranslationHelper i18n => _helper.Translation;
-        internal static List<string> voices = new List<string>();
+        internal static Dictionary<LocalizedContentManager.LanguageCode, List<string>> voices = new Dictionary<LocalizedContentManager.LanguageCode, List<string>>();
         internal static string currentName = "Abigail";
         internal static Dictionary<object, int> currentIndex = new Dictionary<object, int>();
-        internal const int maxValues = 5;
+        internal static int maxValues = 5;
+       
 
         public override void Entry(IModHelper helper)
         {
             _helper = helper;
+            _manifest = ModManifest;
             config = Helper.ReadConfig<ModConfig>();
 
-            Helper.Events.GameLoop.GameLaunched += GameLoop_GameLaunched;
+            Helper.Events.GameLoop.OneSecondUpdateTicked += GameLoop_OneSecondUpdateTicked;
+
+            helper.ConsoleCommands.Add("tts_update", "Updates new NPCs", (s,p) => setUpNPCConfig());
 
             Helper.WriteConfig<ModConfig>(config);
             string tmppath = Path.Combine(Path.Combine(Environment.CurrentDirectory, "Content"), "TTS");
@@ -41,44 +47,132 @@ namespace PelicanTTS
             helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
             helper.Events.GameLoop.ReturnedToTitle += OnReturnedToTitle;
 
-            voices = new List<string>()
+            voices.Add(LocalizedContentManager.LanguageCode.de, (new List<string>()
             {
-                "Brian","Amy","Joey","Emma","Nicole","Justin","Russell","Matthew","Kendra","Salli","Kimberly","Geraint","Ivy","Raveena"
-            };
+                "Marlene","Vicki","Hans"
+            }).OrderBy(v => v).ToList());
 
-           voices = new List<string>(voices.OrderBy(v => v));
+            voices.Add(LocalizedContentManager.LanguageCode.en, (new List<string>()
+            {
+                "Brian","Amy","Joey","Emma","Nicole","Justin","Russell","Matthew","Kendra","Salli","Kimberly","Geraint","Ivy","Raveena","Aditi"
+            }).OrderBy(v => v).ToList());
 
+            voices.Add(LocalizedContentManager.LanguageCode.es, (new List<string>()
+            {
+                "Lucia","Conchita","Enrique",
+                "Mia",
+                "Penelope","Lupe","Miguel",
+                "Vitoria","Camila","Ricardo","Cristiano","Ines",
+                "Bianca","Carla","Giorgio"
+            }).OrderBy(v => v).ToList());
+
+            voices.Add(LocalizedContentManager.LanguageCode.pt, (new List<string>()
+            {
+                "Lucia","Conchita","Enrique",
+                "Mia",
+                "Penelope","Lupe","Miguel",
+                "Vitoria","Camila","Ricardo","Cristiano","Ines"
+            }).OrderBy(v => v).ToList());
+
+            voices.Add(LocalizedContentManager.LanguageCode.fr, (new List<string>()
+            {
+                "Celine","Lea","Mathieu","Chantal"
+            }).OrderBy(v => v).ToList());
+
+            voices.Add(LocalizedContentManager.LanguageCode.it, (new List<string>()
+            {
+                "Bianca","Carla","Giorgio",
+                "Mia",
+                "Penelope","Lupe","Miguel",
+                "Lucia","Conchita","Enrique"
+            }).OrderBy(v => v).ToList());
+
+            voices.Add(LocalizedContentManager.LanguageCode.ja, (new List<string>()
+            {
+                "Mizuki","Takumi"
+            }).OrderBy(v => v).ToList());
+
+            voices.Add(LocalizedContentManager.LanguageCode.ko, (new List<string>()
+            {
+                "Seoyeon"
+            }).OrderBy(v => v).ToList());
+
+            voices.Add(LocalizedContentManager.LanguageCode.ru, (new List<string>()
+            {
+                "Tatyana","Maxim"
+            }).OrderBy(v => v).ToList());
+
+            voices.Add(LocalizedContentManager.LanguageCode.tr, (new List<string>()
+            {
+                "Filiz"
+            }).OrderBy(v => v).ToList());
+
+            voices.Add(LocalizedContentManager.LanguageCode.zh, (new List<string>()
+            {
+                "Zhiyu"
+            }).OrderBy(v => v).ToList());
+            
+        }
+
+        private void GameLoop_OneSecondUpdateTicked(object sender, OneSecondUpdateTickedEventArgs e)
+        {
+            setUpNPCConfig();
+            setUpConfig();
+            Helper.Events.GameLoop.OneSecondUpdateTicked -= GameLoop_OneSecondUpdateTicked;
 
         }
 
-        private void GameLoop_GameLaunched(object sender, GameLaunchedEventArgs e)
+        private void setUpNPCConfig()
         {
             var npcs = Helper.Content.Load<Dictionary<string, string>>("Data//NPCDispositions", ContentSource.GameContent);
+
+            if (!config.Voices.ContainsKey("Default"))
+                config.Voices.Add("Default", new VoiceSetup() { Voice = SpeechHandlerPolly.getVoice("default", true) });
+
             foreach (string npc in npcs.Keys)
             {
                 if (!config.Voices.ContainsKey(npc))
                     config.Voices.Add(npc, new VoiceSetup() { Voice = SpeechHandlerPolly.getVoice(npc, npcs[npc].Contains("female")) });
             }
-
+            config.Rate = Math.Max(50, Math.Min(config.Rate, 200));
             Helper.WriteConfig<ModConfig>(config);
-            setUpConfig();
         }
+       
         public static Dictionary<string, MenuVoiceSetup> activeVoiceSetup = new Dictionary<string, MenuVoiceSetup>();
-
+        public static int activeRate = 100;
+        public static float activeVolume = 1;
         public void setUpConfig()
         {
+
+            HarmonyInstance instance = HarmonyInstance.Create("PelicanTTS.GMCM");
+           // instance.Patch(typeof(ChatBox).GetMethod("receiveChatMessage"), prefix: new HarmonyMethod(typeof(PelicanTTSMod).GetMethod("receiveChatMessage")));
+
             if (!Helper.ModRegistry.IsLoaded("spacechase0.GenericModConfigMenu"))
                 return;
-            activeVoiceSetup = new Dictionary<string, MenuVoiceSetup>();
-            HarmonyInstance instance = HarmonyInstance.Create("PelicanTTS.GMCM");
 
+            var cVoices = voices[LocalizedContentManager.LanguageCode.en];
+
+            if (voices.ContainsKey(Helper.Translation.LocaleEnum))
+                cVoices = voices[Helper.Translation.LocaleEnum];
+
+            maxValues = Math.Min(cVoices.Count + 1, 7);
+
+            activeVoiceSetup = new Dictionary<string, MenuVoiceSetup>();
             var api = Helper.ModRegistry.GetApi<IGMCMAPI>("spacechase0.GenericModConfigMenu");
+
             api.RegisterModConfig(ModManifest, () =>
             {
                 config.Greeting = true;
                 config.MumbleDialogues = false;
                 config.Pitch = 0;
                 config.Volume = 1;
+                config.Rate = 100;
+                config.ReadDialogues = true;
+                config.ReadHudMessages = true;
+                config.ReadLetters = true;
+                config.ReadNonCharacterMessages = true;
+                //config.ReadChatMessages = true;
+
                 var npcs = Helper.Content.Load<Dictionary<string, string>>("Data//NPCDispositions", ContentSource.GameContent);
 
                 foreach (var voice in config.Voices.Keys)
@@ -88,21 +182,41 @@ namespace PelicanTTS
                         config.Voices[voice].Voice = SpeechHandlerPolly.getVoice(voice, npcs[voice].Contains("female"));
                 }
             }, () => Helper.WriteConfig<ModConfig>(config));
+            api.RegisterLabel(ModManifest, MainLabelText, "");
+
             api.RegisterSimpleOption(ModManifest, "Mumbling", "Should all NPCs mumble", () => config.MumbleDialogues, (s) => config.MumbleDialogues = s);
             api.RegisterSimpleOption(ModManifest, "Greeting", "Enables the morning greeting", () => config.Greeting, (s) => config.Greeting = s);
+            api.RegisterSimpleOption(ModManifest, "Read Character Dialogues", "", () => config.ReadDialogues, (s) => config.ReadDialogues = s);
+            api.RegisterSimpleOption(ModManifest, "Read Non-Character Messages", "", () => config.ReadNonCharacterMessages, (s) => config.ReadNonCharacterMessages = s);
+            api.RegisterSimpleOption(ModManifest, "Read Letters", "", () => config.ReadLetters, (s) => config.ReadLetters = s);
+            api.RegisterSimpleOption(ModManifest, "Read Hud Messages", "", () => config.ReadHudMessages, (s) => config.ReadHudMessages = s);
+          //  api.RegisterSimpleOption(ModManifest, "Read Chat Messages", "", () => config.ReadChatMessages, (s) => config.ReadChatMessages = s);
 
-            api.RegisterClampedOption(ModManifest, "Volume", "Set Volume", () => config.Volume, (s) =>
+            api.RegisterClampedOption(ModManifest, "Volume", "Set Volume", () =>
+            {
+                activeVolume = config.Volume;
+                return    config.Volume;
+            }, (s) =>
             {
                 config.Volume = (float)Math.Ceiling((double)(s * 100)) / 100f;
             }, 0, 1);
 
-            if (PelicanTTSMod.i18n.LocaleEnum == LocalizedContentManager.LanguageCode.en)
+            api.RegisterClampedOption(ModManifest, "Rate", "Set Rate (20-200%)", () =>
             {
+                activeRate = config.Rate;
+                return config.Rate;
+            }, (s) =>
+            {
+                config.Rate = (int) s;
+            }, 50, 200);
+
                 instance.Patch(Type.GetType("GenericModConfigMenu.UI.Dropdown, GenericModConfigMenu").GetMethod("Update"), new HarmonyMethod(typeof(PelicanTTSMod).GetMethod("UpdateGMCM")));
                 instance.Patch(Type.GetType("GenericModConfigMenu.UI.Dropdown, GenericModConfigMenu").GetMethod("Draw"), new HarmonyMethod(typeof(PelicanTTSMod).GetMethod("DrawGMCM")));
                 instance.Patch(Type.GetType("GenericModConfigMenu.UI.Table, GenericModConfigMenu").GetMethod("Update"), new HarmonyMethod(typeof(PelicanTTSMod).GetMethod("UpdateTableGMCM")));
+                instance.Patch(Type.GetType("GenericModConfigMenu.UI.Scrollbar, GenericModConfigMenu").GetMethod("Scroll"), new HarmonyMethod(typeof(PelicanTTSMod).GetMethod("ScrollGMCM")));
+            
 
-                Helper.Events.Input.MouseWheelScrolled += (s, e) =>
+            Helper.Events.Input.MouseWheelScrolled += (s, e) =>
                 {
                     List<object> obj = new List<object>();
                     foreach(var dropDown in currentIndex.Keys.Where(k => ((bool)k.GetType().GetField("dropped").GetValue(k))))
@@ -115,7 +229,9 @@ namespace PelicanTTS
                 };
 
                 api.RegisterLabel(ModManifest, "Voices", "Set the voices for each NPC");
-                int index = 1;
+                int index = 2;
+
+
                 foreach (var npc in config.Voices.Keys.OrderBy(k => k))
                 {
                     if (!activeVoiceSetup.ContainsKey(npc))
@@ -124,7 +240,7 @@ namespace PelicanTTS
                     activeVoiceSetup[npc].Name = npc;
 
                     List<string> npcVoices = new List<string>() { npc + ":default" };
-                    npcVoices.AddRange(voices);
+                    npcVoices.AddRange(cVoices);
                     api.RegisterChoiceOption(ModManifest, npc + " Voice", "Choose a voice", () =>
                     {
                         Game1.stopMusicTrack(Game1.MusicContext.Default);
@@ -151,12 +267,26 @@ namespace PelicanTTS
 
                 for (int i = 0; i < 12; i++)
                     api.RegisterLabel(ModManifest, " ", " ");
-            }
+            
 
+        }
+
+        public static void receiveChatMessage(ChatBox __instance, long sourceFarmer, int chatKind, LocalizedContentManager.LanguageCode language, string message)
+        {
+            if (Game1.player.UniqueMultiplayerID != sourceFarmer && (chatKind == 3 || chatKind == 0 ))
+                SpeechHandlerPolly.chats.Enqueue(message);
+        }
+
+        public static bool ScrollGMCM(object __instance)
+        {
+            return Mouse.GetState().LeftButton != ButtonState.Pressed;
         }
 
         public static bool DrawGMCM(object __instance, SpriteBatch b)
         {
+            if (!IsThisPage)
+                return true;
+
             List<string> choicesc = new List<string>((string[])__instance.GetType().GetProperty("Choices").GetValue(__instance));
             if (!choicesc[0].Contains(":default"))
                 return true;
@@ -199,14 +329,40 @@ namespace PelicanTTS
 
         public static int lastActive = 0;
         public static bool exiting = false;
+        public static bool IsThisPage = false;
+        const string MainLabelText = "Pelican TTS";
         public static bool UpdateTableGMCM(object __instance, ref bool __state)
         {
-           IList<object> children = (IList<object>) __instance.GetType().GetProperty("Children").GetValue(__instance);
+           List<object> children = new List<object>((IList<object>) __instance.GetType().GetProperty("Children").GetValue(__instance));
+
+            object mainLabel = children.FirstOrDefault(c => c.GetType().Name.Contains("Label"));
+            if (mainLabel == null)
+            {
+                IsThisPage = false;
+                return true;
+            }
+            object mainLabelText = mainLabel.GetType().GetProperty("String").GetValue(mainLabel);
+            IsThisPage = mainLabelText is string mlt && mlt == MainLabelText;
+
+            if (!IsThisPage)
+                return true;
+
             int index = 0;
             foreach (var child in children.Where(c => c.GetType().Name.Contains("Slider"))){
-                if(index == 0)
+                if(index < 2)
                 {
-                    index = 1;
+                    if (index == 1)
+                    {
+                        int rvalue = (int)child.GetType().GetProperty("Value").GetValue(child);
+                        activeRate = rvalue;
+                    }
+                    else
+                    {
+                        float vvalue = (float)child.GetType().GetProperty("Value").GetValue(child);
+                        activeVolume = (float)Math.Ceiling((double)(vvalue * 100)) / 100f;
+                    }
+
+                    index++;
                     continue;
                 }
 
@@ -220,6 +376,9 @@ namespace PelicanTTS
 
         public static bool UpdateGMCM(object __instance, ref bool __state)
         {
+            if (!IsThisPage)
+                return true;
+
             List<string> choices = new List<string>((string[])__instance.GetType().GetProperty("Choices").GetValue(__instance));
             if (!choices[0].Contains(":default"))
                 return true;
@@ -266,7 +425,17 @@ namespace PelicanTTS
                 if (value == choices[0])
                     value = SpeechHandlerPolly.getVoice(cname);
                 var mvs = activeVoiceSetup.Values.First(avs => avs.Name == choices[0].Split(':')[0]);
-                SpeechHandlerPolly.configSay(choices[0].Split(':')[0], value, "Hi, my name is " + choices[0].Split(':')[0] + ".", mvs is MenuVoiceSetup ? mvs.Pitch : -1);
+
+                var intro = choices[0].Split(':')[0];
+                if (intro == "Default")
+                    intro = i18n.Get("FestivalGreeting");
+                else
+                {
+                    var dialogues = _helper.Content.Load<Dictionary<string, string>>(@"Characters/Dialogue/" + intro, ContentSource.GameContent);
+                    if (dialogues != null && dialogues.ContainsKey("Introduction"))
+                        intro = dialogues["Introduction"].Split('^')[0].Split('#')[0].Replace("@", "");
+                }
+                SpeechHandlerPolly.configSay(choices[0].Split(':')[0], value, intro, activeRate, mvs is MenuVoiceSetup ? mvs.Pitch : -1, activeVolume);
             }
 
             if (new Rectangle((int)pos.X, (int)pos.Y, 300, 44 * maxValues).Contains(Game1.getOldMouseX(), Game1.getOldMouseY()))

@@ -22,6 +22,8 @@ namespace PelicanTTS
         private static string lastDialog;
         private static string lastLetter;
         private static string lastHud;
+        private static string lastChat;
+        public static Queue<string> chats = new Queue<string>();
         public static string currentText;
         private static Thread speechThread;
         private static bool runSpeech;
@@ -42,7 +44,7 @@ namespace PelicanTTS
 
         }
 
-        internal static void configSay(string name, string voice, string text, float pitch = -1)
+        internal static void configSay(string name, string voice, string text, int rate = -1, float pitch = -1, float volume = -1)
         {
             Task.Run(() =>
            {
@@ -59,7 +61,7 @@ namespace PelicanTTS
                if (mumbling)
                    text = @"<speak><amazon:effect phonation='soft'><amazon:effect vocal-tract-length='-20%'>" + Dialogue.convertToDwarvish(text) + @"</amazon:effect></amazon:effect></speak>";
                else
-                   text = @"<speak><amazon:auto-breaths><amazon:effect phonation='soft'>" + text + @"</amazon:effect></amazon:auto-breaths></speak>";
+                   text = @"<speak><amazon:auto-breaths><amazon:effect phonation='soft'><prosody rate='"+ (rate == -1 ? PelicanTTSMod.config.Rate : rate) + "%'>" + text + @"</prosody></amazon:effect></amazon:auto-breaths></speak>";
 
 
                int hash = text.GetHashCode();
@@ -68,7 +70,6 @@ namespace PelicanTTS
 
                string file = Path.Combine(Path.Combine(tmppath, name), "speech_" + currentVoice.Value + (mumbling ? "_mumble_" : "_") + hash + ".wav");
                SoundEffect nextSpeech = null;
-
                if (!File.Exists(file))
                {
                    SynthesizeSpeechRequest sreq = new SynthesizeSpeechRequest();
@@ -93,8 +94,7 @@ namespace PelicanTTS
 
                speak = false;
                currentSpeech.Pitch =  (mumbling ? 0.5f : pitch == -1 ? PelicanTTSMod.config.Voices[name].Pitch : pitch);
-               currentSpeech.Volume = PelicanTTSMod.config.Volume;
-
+               currentSpeech.Volume = volume == -1 ? PelicanTTSMod.config.Volume : volume;
                currentSpeech.Play();
            });
         }
@@ -151,13 +151,21 @@ namespace PelicanTTS
             speakerName = name;
 
             string t = PelicanTTSMod.i18n.Get(name);
-            if (PelicanTTSMod.i18n.LocaleEnum == LocalizedContentManager.LanguageCode.en  && PelicanTTSMod.config.Voices.ContainsKey(name))
+
+            if (name == "default" && PelicanTTSMod.config.Voices.ContainsKey("Default"))
+                t = PelicanTTSMod.config.Voices["Default"].Voice;
+            else if (PelicanTTSMod.config.Voices.ContainsKey(name))
                 t = PelicanTTSMod.config.Voices[name].Voice;
 
-            if (t.ToString() == "")
+            if (t.ToString() == "" || t.Contains("no translation"))
                 t = PelicanTTSMod.i18n.Get("default_" + (female ? "female" : "male"));
-            
-            if (VoiceId.FindValue(t) is VoiceId vId1)
+
+            setVoiceById(t);
+        }
+
+        public static void setVoiceById(string id)
+        {
+            if (VoiceId.FindValue(id) is VoiceId vId1)
                 currentVoice = vId1;
             else if (VoiceId.FindValue(PelicanTTSMod.i18n.Get("default")) is VoiceId vId2)
                 currentVoice = vId2;
@@ -173,10 +181,10 @@ namespace PelicanTTS
             speakerName = name;
 
             string t = PelicanTTSMod.i18n.Get(name);
-            if (t.ToString() != "")
+            if (t.ToString() != "" && !t.Contains("no translation"))
                 return t;
 
-            return "default_" + (female ? "female" : "male");
+            return PelicanTTSMod.i18n.Get("default_" + (female ? "female" : "male"));
         }
 
 
@@ -194,6 +202,12 @@ namespace PelicanTTS
                 {
                     DialogueBox dialogueBox = (DialogueBox)Game1.activeClickableMenu;
 
+                    if (!dialogueBox.isPortraitBox() && !PelicanTTSMod.config.ReadNonCharacterMessages)
+                        return;
+
+                    if (dialogueBox.isPortraitBox() && !PelicanTTSMod.config.ReadDialogues)
+                        return;
+
                     if (dialogueBox.isPortraitBox() && Game1.currentSpeaker != null)
                         setVoice(Game1.currentSpeaker.Name, Game1.currentSpeaker.Gender != 0);
                     else
@@ -206,7 +220,7 @@ namespace PelicanTTS
                     }
 
                 }
-                else if (Game1.activeClickableMenu is LetterViewerMenu lvm && !PelicanTTSMod.config.MumbleDialogues)
+                else if (Game1.activeClickableMenu is LetterViewerMenu lvm && !PelicanTTSMod.config.MumbleDialogues && PelicanTTSMod.config.ReadLetters)
                 {
                     setVoice("default");
                     List<string> mailMessage = Helper.Reflection.GetField<List<string>>(lvm, "mailMessage").GetValue();
@@ -217,7 +231,7 @@ namespace PelicanTTS
                         lastLetter = letter;
                     }
                 }
-                else if (Game1.hudMessages.Count > 0 && !PelicanTTSMod.config.MumbleDialogues)
+                else if (Game1.hudMessages.Count > 0 && !PelicanTTSMod.config.MumbleDialogues && PelicanTTSMod.config.ReadHudMessages)
                 {
                     if (Game1.hudMessages[Game1.hudMessages.Count - 1].Message != lastHud)
                     {
@@ -226,6 +240,17 @@ namespace PelicanTTS
                         lastHud = Game1.hudMessages[Game1.hudMessages.Count - 1].Message;
                     }
                 }
+                /*else if(chats.Count > 0 && PelicanTTSMod.config.ReadChatMessages)
+                {
+                    string chat = chats.Dequeue();
+                    if (lastChat != chat)
+                    {
+                        setVoice("default");
+                        currentText = chat;
+                        lastChat = chat;
+                        speak = true;
+                    }
+                }*/
             }
         }
 
@@ -239,8 +264,7 @@ namespace PelicanTTS
 
                     bool mumbling = PelicanTTSMod.config.MumbleDialogues && (currentText != lastSay);
 
-
-                        if (currentText.StartsWith("+"))
+                    if (currentText.StartsWith("+"))
                         continue;
 
                     currentText = currentText.Replace("< ", " ").Replace("` ", "  ").Replace("> ", " ").Replace('^', ' ').Replace(Environment.NewLine, " ").Replace("$s", "").Replace("$h", "").Replace("$g", "").Replace("$e", "").Replace("$u", "").Replace("$b", "").Replace("$8", "").Replace("$l", "").Replace("$q", "").Replace("$9", "").Replace("$a", "").Replace("$7", "").Replace("<", "").Replace("$r", "").Replace("[", "<").Replace("]", ">");
@@ -248,8 +272,7 @@ namespace PelicanTTS
                     if (mumbling)
                         currentText = @"<speak><amazon:effect phonation='soft'><amazon:effect vocal-tract-length='-20%'>" + Dialogue.convertToDwarvish(currentText) + @"</amazon:effect></amazon:effect></speak>";
                     else
-                        currentText = @"<speak><amazon:auto-breaths><amazon:effect phonation='soft'>" + currentText + @"</amazon:effect></amazon:auto-breaths></speak>";
-
+                        currentText = @"<speak><amazon:auto-breaths><amazon:effect phonation='soft'><prosody rate='" + PelicanTTSMod.config.Rate + "%'>" + currentText + @"</prosody></amazon:effect></amazon:auto-breaths></speak>";
 
                     int hash = currentText.GetHashCode();
                     if (!Directory.Exists(Path.Combine(tmppath, speakerName)))
@@ -286,7 +309,7 @@ namespace PelicanTTS
                         currentSpeech.Pitch = (mumbling ? 0.5f : PelicanTTSMod.config.Pitch);
                         currentSpeech.Volume = PelicanTTSMod.config.Volume;
 
-                        if (PelicanTTSMod.i18n.LocaleEnum == LocalizedContentManager.LanguageCode.en && PelicanTTSMod.config.Voices.ContainsKey(speakerName))
+                        if (PelicanTTSMod.config.Voices.ContainsKey(speakerName))
                             currentSpeech.Pitch = (mumbling ? 0.5f : PelicanTTSMod.config.Voices[speakerName].Pitch);
 
                         currentSpeech.Play();
